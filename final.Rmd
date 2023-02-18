@@ -1,0 +1,168 @@
+---
+title: "STAT 442: Final Project"
+author: ""
+output: 
+  pdf_document:
+    keep_tex: yes
+    number_sections: no
+  html_document:
+    toc: yes
+  word_document: default
+urlcolor: blue
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+```{r, include = FALSE}
+library(knitr)
+#opts_chunk$set(tidy.opts=list(width.cutoff=70),tidy=TRUE)
+```
+
+The data used in the final project is the current season NBA player boxscore data consisting of matches from 2022-10-18 to 2022-12-14 imported from the ``hoopr`` package. The code used to generate the plots are attached at the end of the report. 
+
+The first plot below shows the relationship between the points scored and number of rebounds and playing time per match. 
+
+\bigskip
+
+```{r import, echo=FALSE}
+# import library
+library(hoopR)
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+library(ggstatsplot)
+library(metR)
+# import NBA player statistics for the most recent season
+df <- load_nba_player_box(seasons = most_recent_nba_season())
+# convert char to numeric for continuous variables in the data
+df$pts <- as.numeric(df$pts)
+df$reb <- as.numeric(df$reb)
+df$oreb <- as.numeric(df$oreb)
+df$min <- as.numeric(df$min)
+```
+
+
+
+```{r v1, echo=FALSE}
+# Visualization 1 (2D): Contour plot for points against ofensive rebounds and playing time
+ggplot(df, aes(x = reb, y = min)) + 
+    geom_raster(aes(fill = pts)) + 
+    geom_contour(aes(z = pts), colour = "white", size = 0.2, alpha = 0.5) + 
+    geom_text_contour(aes(z = pts),  colour = "white", size = 3) + 
+    labs(x = "Number of rebounds", y = "Playing time (minutes)", 
+         fill = "Points", 
+         title = "Points against rebounds and playing time per match", 
+         subtitle = "Current season: matches from 2022-10-18 to 2022-12-14") + 
+    theme(plot.title = element_text(size = 12, face = "bold"))
+```
+
+
+\newpage
+
+The second plot below shows the distribution of the number of rebounds for players. The top three players with most number of rebounds are shown. 
+
+```{r v2, echo=FALSE, fig.height=4}
+# Visualization 2 (categorical): violin plot of distribution of rebounds by top athlete 
+# with the most rebounds.
+# Order athlete by number of rebounds
+pos.most.reb <- df %>% 
+    group_by(athlete_id) %>% 
+    summarise(n=sum(reb)) %>% 
+    arrange(desc(n))
+# filter data to players with most rebounds
+df.reb <- df %>%
+    filter(athlete_id %in% pos.most.reb$athlete_id[1:3])
+# create violin plot
+plt <- ggbetweenstats(data = df.reb, x = athlete_short_name, y = reb) +
+    labs(x = "Athlete position", y = "Number of rebounds per game", 
+       title = "Distributions of rebounds by players (top 3 most rebounds)", 
+       subtitle = "Current season: matches from 2022-10-18 to 2022-12-14")
+plt
+```
+
+The third plot below tracks the total points and rebounds for top players up to date in the current season. 
+
+```{r v3, echo=FALSE, fig.height=4}
+# Visualization 3 (homebrew): tracking cumulative points/rebounds for top players
+# find players with most points
+player.most.pts <- df %>% 
+    group_by(athlete_id) %>% 
+    summarise(n = sum(pts)) %>% 
+    arrange(desc(n))
+# filter top 5 players and extract their points/rebounds for each match
+play.pts <- df %>% 
+    filter(athlete_id %in% player.most.pts$athlete_id[1:5]) %>% 
+    arrange(game_date) %>% 
+    select(athlete_short_name, athlete_id, reb, pts, game_date) %>%
+    group_by(athlete_id) %>%
+    mutate(rank = order(game_date), cum.pts = cumsum(pts), cum.reb = cumsum(reb))
+# prepare data for line segment by left join game data to itself
+df.combined <- play.pts %>% 
+    mutate(rank = rank + 1) %>%
+    left_join(select(play.pts, c(athlete_id, cum.reb, cum.pts, rank)),  
+              by = c('athlete_id', 'rank'))
+# extract line segment and last match
+df.segment <- df.combined %>%
+    filter(!is.na(cum.pts.y))
+df.last <- df.combined %>%
+    filter(is.na(cum.pts.y))
+# create plot
+ggplot(df.segment) + 
+    aes(x = cum.reb.x, y = cum.pts.x, xend = cum.reb.y, yend = cum.pts.y, 
+        group = athlete_short_name, colour = athlete_short_name) + 
+    geom_segment(size = .5) + 
+    geom_point(data = df.last, aes(x = cum.reb.x, y = cum.pts.x), col = 'blue') + 
+    geom_text(data = df.last, aes(x = cum.reb.x, y = cum.pts.x, label = athlete_short_name), 
+              size = 2.5, nudge_y = 30, nudge_x = -5) +
+    labs(title = "Tracker of Cumulative points and rebounds for Top 5 Scored Players", 
+         subtitle = "Current season: matches from 2022-10-18 to 2022-12-14", 
+         x = "Cumulative rebounds", y = "Cumulative points", 
+         colour = "Player") + 
+    theme(plot.title = element_text(size = 12, face = "bold"),
+          plot.subtitle = element_text(size = 10))
+```
+
+\newpage
+
+The last table shows the field goal (FG) percentage leader board for the current season for players who appeared in more than 10 games.
+
+```{r v4, echo=FALSE}
+# Visualization 4 (wild card): Field Goal Percentage Leaders
+# compute summary statistics: average pts, average rebounds, accuracy
+df.tbl <- df %>% 
+    separate(fg, c('fg.a','fg.t')) %>%
+    mutate(fg.a = as.numeric(fg.a), fg.t = as.numeric(fg.t)) %>%
+    group_by(athlete_id) %>%
+    summarise(pts = sum(pts), reb = sum(reb), n = n_distinct(game_id), 
+              team = min(team_name), name = min(athlete_short_name),
+              pos = min(athlete_position_abbreviation),
+              fg.a = sum(fg.a), fg.t = sum(fg.t)) %>%
+    mutate(avg.pts = round(pts / n,1), 
+           avg.reb = round(reb / n, 1), 
+           acc1 = fg.a / fg.t,
+           acc = paste(round(fg.a / fg.t,3)*100, '%', sep = '')) %>%
+    arrange(desc(acc1)) %>%
+    filter(n > 10) %>%
+    select(name, pos, team, n, fg.a, fg.t, acc)
+# display table
+knitr::kable(df.tbl[1:20,], col.names =  c("Name", "Position", "Team", "Games Played", 
+                                    "FGM", "FGA","FG%"), 
+             caption = "Top 20 field goal percentage among players with more than 10 games played 
+             (Current season: matches from 2022-10-18 to 2022-12-14)")
+```
+
+\newpage
+
+Code:
+```{r ref.label="import", eval=FALSE}
+```
+```{r ref.label="v1", eval=FALSE}
+```
+```{r ref.label="v2", eval=FALSE}
+```
+```{r ref.label="v3", eval=FALSE}
+```
+```{r ref.label="v4", eval=FALSE}
+```
